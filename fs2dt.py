@@ -4,6 +4,7 @@ import datetime
 import os.path
 import sqlite3
 from urlparse import urlparse, urljoin
+import xml.etree.cElementTree as ET
 
 
 class Tag(object):
@@ -163,6 +164,9 @@ class SideCar(object):
 
     def __init__(self, photo):
         self.photo = photo
+
+    def write(self):
+        pass
 
 
 if __name__ == "__main__":
