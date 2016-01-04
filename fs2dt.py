@@ -1,5 +1,6 @@
 #!/usr/bin/env python2.7
 
+import collections
 import datetime
 import os.path
 import sqlite3
@@ -115,6 +116,87 @@ class PhotoVersion(object):
         Photo.photos[self.photo_id].versions[self.version_id] = self
 
 
+class SideCar(object):
+
+    DECL = '<?xml version="1.0" encoding="UTF-8"?>'
+    XMP_CONTENT = {
+        'x:xmpmeta': {
+            'xmlns:x': "adobe:ns:meta/",
+            'x:xmptk': "XMP Core 4.4.0-Exiv2",
+            'rdf:RDF': {
+                'xmlns:rdf': "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                'rdf:Description': {
+                    'rdf:about': "",
+                    'xmlns:xmp': "http://ns.adobe.com/xap/1.0/",
+                    'xmlns:xmpMM': "http://ns.adobe.com/xap/1.0/mm/",
+                    'xmlns:darktable': "http://darktable.sf.net/",
+                    'xmlns:dc': "http://purl.org/dc/elements/1.1/",
+                    'xmlns:lr': "http://ns.adobe.com/lightroom/1.0/",
+                    'darktable:xmp_version': "1",
+                    'darktable:raw_params': "0",
+                    'darktable:auto_presets_applied': "1",
+                    'darktable:mask_id': {'rdf:Seq': {}},
+                    'darktable:mask_type': {'rdf:Seq': {}},
+                    'darktable:mask_name': {'rdf:Seq': {}},
+                    'darktable:mask_version': {'rdf:Seq': {}},
+                    'darktable:mask': {'rdf:Seq': {}},
+                    'darktable:mask_nb': {'rdf:Seq': {}},
+                    'darktable:mask_src': {'rdf:Seq': {}},
+                    'darktable:history_modversion': {'rdf:Seq': {}},
+                    'darktable:history_enabled': {'rdf:Seq': {}},
+                    'darktable:history_operation': {'rdf:Seq': {}},
+                    'darktable:history_params': {'rdf:Seq': {}},
+                    'darktable:blendop_params': {'rdf:Seq': {}},
+                    'darktable:blendop_version': {'rdf:Seq': {}},
+                    'darktable:multi_priority': {'rdf:Seq': {}},
+                    'darktable:multi_name': {'rdf:Seq': {}},
+                }
+            }
+        }
+    }
+
+    def __init__(self, photo):
+        self.photo = photo
+
+    def _populate_tag(self, element, element_dict):
+        for key, value in element_dict.items():
+            if type(value) == dict:
+                se = ET.SubElement(element, key)
+                self._populate_tag(se, value)
+            else:
+                element.set(key, value)
+
+    def write(self):
+
+        root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
+        self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
+        pass
+
+
+COMMENT = """
+   xmp:Rating="4"
+   xmpMM:DerivedFrom="DSC_0139.jpg"
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">this is the description</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+   <dc:subject>
+    <rdf:Seq>
+     <rdf:li>DC-Washington: George's_teeth/dentures</rdf:li>
+     <rdf:li>My_Tag</rdf:li>
+     <rdf:li>TEST</rdf:li>
+    </rdf:Seq>
+   </dc:subject>
+   <lr:hierarchicalSubject>
+    <rdf:Seq>
+     <rdf:li>TEST|DC-Washington: George's_teeth/dentures</rdf:li>
+     <rdf:li>TEST|My_Tag</rdf:li>
+    </rdf:Seq>
+   </lr:hierarchicalSubject>
+"""
+
+
 class FSpotDB(object):
 
     def __init__(self, db_file):
@@ -158,15 +240,6 @@ class FSpotDB(object):
                 photo.tags.append(self.tags[tid])
 
         self.db.close()
-
-
-class SideCar(object):
-
-    def __init__(self, photo):
-        self.photo = photo
-
-    def write(self):
-        pass
 
 
 if __name__ == "__main__":
