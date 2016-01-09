@@ -180,6 +180,13 @@ class SideCar(object):
 
     def write(self):
 
+        f_tags = set()
+        h_tags = set()
+        for tag in self.photo.tags:
+            f, h = tag.to_xmp_tags()
+            f_tags.update(f)
+            h_tags.add(h)
+
         for version in self.photo.versions.values():
             root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
             self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
@@ -191,6 +198,18 @@ class SideCar(object):
                 rdfli = ET.SubElement(rdfalt, 'rdf:li')
                 rdfli.set('xml:lang', "x-default")
                 rdfli.text = version.parent.description
+            if len(f_tags) > 0:
+                dcsub = ET.SubElement(desc, 'dc:subject')
+                rdfseq = ET.SubElement(dcsub, 'rdf:Seq')
+                for tag in f_tags:
+                    rdfli = ET.SubElement(rdfseq, 'rdf:li')
+                    rdfli.text = tag
+            if len(h_tags) > 0:
+                lrsub = ET.SubElement(desc, 'lr:hierarchicalSubject')
+                rdfseq = ET.SubElement(lrsub, 'rdf:Seq')
+                for tag in h_tags:
+                    rdfli = ET.SubElement(rdfseq, 'rdf:li')
+                    rdfli.text = tag
             io = StringIO()
             io.write("%s\n" % SideCar.XMP_DECL)
             xml.dom.minidom.parseString(ET.tostring(root)).writexml(io,
@@ -308,7 +327,7 @@ class FSpotDB(object):
 if __name__ == "__main__":
 
     def cb(text, pcpt):
-        sys.stdout.write('\r%s: % 5.1f' % (text, 100.0*pcpt))
+        sys.stdout.write('\r%s: % 5.1f%%' % (text, 100.0*pcpt))
         sys.stdout.flush()
 
     db = FSpotDB('SUPPORT/f-spot.db', progress_cb=cb)
