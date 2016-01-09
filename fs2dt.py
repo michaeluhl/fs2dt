@@ -1,10 +1,13 @@
 #!/usr/bin/env python2.7
 
 import collections
+from cStringIO import StringIO
 import datetime
 import os.path
 import sqlite3
+import sys
 from urlparse import urlparse, urljoin
+import xml.dom.minidom
 import xml.etree.cElementTree as ET
 
 
@@ -113,12 +116,13 @@ class PhotoVersion(object):
         self.filename = version_row[4]
         self.import_md5 = version_row[5]
         self.file_path = urlparse(urljoin(self.base_uri, self.filename)).path
+        self.parent = Photo.photos[self.photo_id]
         Photo.photos[self.photo_id].versions[self.version_id] = self
 
 
 class SideCar(object):
 
-    DECL = '<?xml version="1.0" encoding="UTF-8"?>'
+    XMP_DECL = '<?xml version="1.0" encoding="UTF-8"?>'
     XMP_CONTENT = {
         'x:xmpmeta': {
             'xmlns:x': "adobe:ns:meta/",
@@ -158,19 +162,42 @@ class SideCar(object):
     def __init__(self, photo):
         self.photo = photo
 
-    def _populate_tag(self, element, element_dict):
+    @classmethod
+    def _populate_tag(cls, element, element_dict):
         for key, value in element_dict.items():
             if type(value) == dict:
                 se = ET.SubElement(element, key)
-                self._populate_tag(se, value)
+                cls._populate_tag(se, value)
             else:
                 element.set(key, value)
 
+    @staticmethod
+    def _find_tag(root, tag_name):
+        for e in root.iter():
+            if e.tag == tag_name:
+                return e
+        return None
+
     def write(self):
 
-        root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
-        self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
-        pass
+        for version in self.photo.versions.values():
+            root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
+            self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
+            desc = self._find_tag(root, 'rdf:Description')
+            desc.set('xmp:rating', str(version.parent.rating))
+            if version.parent.description:
+                dcdesc = ET.SubElement(desc, 'dc:description')
+                rdfalt = ET.SubElement(dcdesc, 'rdf:Alt')
+                rdfli = ET.SubElement(rdfalt, 'rdf:li')
+                rdfli.set('xml:lang', "x-default")
+                rdfli.text = version.parent.description
+            io = StringIO()
+            io.write("%s\n" % SideCar.XMP_DECL)
+            xml.dom.minidom.parseString(ET.tostring(root)).writexml(io,
+                                                                    addindent="  ",
+                                                                    newl="\n")
+            print io.getvalue()
+            io.close()
 
 
 COMMENT = """
@@ -199,38 +226,68 @@ COMMENT = """
 
 class FSpotDB(object):
 
-    def __init__(self, db_file):
+    def __init__(self, db_file, progress_cb=None):
         self.filename = os.path.abspath(db_file)
         self.db = sqlite3.connect(self.filename)
 
         cursor = self.db.cursor()
 
+        if progress_cb:
+            progress_cb('Loading Tags', 0.0)
+
         cursor.execute('SELECT data FROM meta WHERE name ="Hidden Tag Id"')
         hidden_tag_row = cursor.fetchone()
         Tag.set_hidden_tag_id(int(hidden_tag_row[0]))
 
+        cursor.execute('SELECT Count(*) FROM tags')
+        numrows = cursor.fetchone()[0]
+
         cursor.execute('SELECT * FROM tags')
 
-        for tag_row in cursor.fetchall():
+        for ct, tag_row in enumerate(cursor.fetchall()):
             Tag(tag_row)
+            if ct % 10 == 0 and progress_cb:
+                progress_cb('Loading Tags', float(ct)/numrows)
 
         self.tags = Tag.tags
 
+        if progress_cb:
+            progress_cb('Loading Tags', 1.0)
+            progress_cb('Loading Rolls', 0.0)
+
+        cursor.execute('SELECT Count(*) FROM rolls')
+        numrows = cursor.fetchone()[0]
+
         cursor.execute('SELECT * FROM rolls')
 
-        for roll_row in cursor.fetchall():
+        for ct, roll_row in enumerate(cursor.fetchall()):
             Roll(roll_row)
+            if ct % 10 == 0 and progress_cb:
+                progress_cb('Loading Rolls', float(ct)/numrows)
 
         self.rolls = Roll.rolls
 
+        if progress_cb:
+            progress_cb('Loading Rolls', 1.0)
+            progress_cb('Loading Photos', 0.0)
+
+        cursor.execute('SELECT Count(*) FROM photos')
+        numrows = cursor.fetchone()[0]
+
         cursor.execute('SELECT * FROM photos')
 
-        for photo_row in cursor.fetchall():
+        for ct, photo_row in enumerate(cursor.fetchall()):
             Photo(photo_row)
+            if ct % 10 == 0 and progress_cb:
+                progress_cb('Loading Photos', float(ct)/numrows)
 
         self.photos = Photo.photos
 
-        for photo in self.photos.values():
+        if progress_cb:
+            progress_cb('Loading Photos', 1.0)
+            progress_cb('Preparing Photo Versions/Tags', 0.0)
+
+        for ct, photo in enumerate(self.photos.values()):
             cursor.execute('SELECT * FROM photo_versions WHERE photo_id = ?', (photo.id, ))
             for version_row in cursor.fetchall():
                 PhotoVersion(version_row)
@@ -239,27 +296,23 @@ class FSpotDB(object):
             for pid, tid in cursor.fetchall():
                 photo.tags.append(self.tags[tid])
 
+            if ct % 10 == 0 and progress_cb:
+                progress_cb('Preparing Photo Versions/Tags', float(ct)/numrows)
+
         self.db.close()
+
+        if progress_cb:
+            progress_cb('Preparing Photo Versions/Tags', 1.0)
 
 
 if __name__ == "__main__":
-    db = FSpotDB('f-spot.db')
 
-    for photo in db.photos.values():
-        for photo_version in photo.versions.values():
-            print "PhotoID:", photo.id
-            print "PhotoPath:", photo_version.file_path
-            subs = set()
-            hsubs = set()
-            for tag in photo.tags:
-                tags, htag = tag.to_xmp_tags()
-                subs.update(tags)
-                hsubs.add(htag)
-            try:
-                tags, htag = photo.get_roll().to_xmp_tags()
-                subs.update(tags)
-                hsubs.add(htag)
-            except KeyError:
-                pass
-            print "Subject:", subs
-            print "HeiraricalSubject:", hsubs
+    def cb(text, pcpt):
+        sys.stdout.write('\r%s: % 5.1f' % (text, 100.0*pcpt))
+        sys.stdout.flush()
+
+    db = FSpotDB('SUPPORT/f-spot.db', progress_cb=cb)
+    sys.stdout.write('\n')
+
+    sc = SideCar(db.photos.values()[0])
+    sc.write()
