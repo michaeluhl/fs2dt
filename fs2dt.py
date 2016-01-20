@@ -245,14 +245,13 @@ COMMENT = """
 
 class FSpotDB(object):
 
-    def __init__(self, db_file, progress_cb=None):
+    def __init__(self, db_file, progress_cb=lambda a, b: None):
         self.filename = os.path.abspath(db_file)
         self.db = sqlite3.connect(self.filename)
 
         cursor = self.db.cursor()
 
-        if progress_cb:
-            progress_cb('Loading Tags', 0.0)
+        progress_cb('Loading Tags', 0.0)
 
         cursor.execute('SELECT data FROM meta WHERE name ="Hidden Tag Id"')
         hidden_tag_row = cursor.fetchone()
@@ -265,14 +264,13 @@ class FSpotDB(object):
 
         for ct, tag_row in enumerate(cursor.fetchall()):
             Tag(tag_row)
-            if ct % 10 == 0 and progress_cb:
+            if ct % 10 == 0:
                 progress_cb('Loading Tags', float(ct)/numrows)
 
         self.tags = Tag.tags
 
-        if progress_cb:
-            progress_cb('Loading Tags', 1.0)
-            progress_cb('Loading Rolls', 0.0)
+        progress_cb('Loading Tags', 1.0)
+        progress_cb('Loading Rolls', 0.0)
 
         cursor.execute('SELECT Count(*) FROM rolls')
         numrows = cursor.fetchone()[0]
@@ -281,14 +279,13 @@ class FSpotDB(object):
 
         for ct, roll_row in enumerate(cursor.fetchall()):
             Roll(roll_row)
-            if ct % 10 == 0 and progress_cb:
+            if ct % 10 == 0:
                 progress_cb('Loading Rolls', float(ct)/numrows)
 
         self.rolls = Roll.rolls
 
-        if progress_cb:
-            progress_cb('Loading Rolls', 1.0)
-            progress_cb('Loading Photos', 0.0)
+        progress_cb('Loading Rolls', 1.0)
+        progress_cb('Loading Photos', 0.0)
 
         cursor.execute('SELECT Count(*) FROM photos')
         numrows = cursor.fetchone()[0]
@@ -297,14 +294,13 @@ class FSpotDB(object):
 
         for ct, photo_row in enumerate(cursor.fetchall()):
             Photo(photo_row)
-            if ct % 10 == 0 and progress_cb:
+            if ct % 10 == 0:
                 progress_cb('Loading Photos', float(ct)/numrows)
 
         self.photos = Photo.photos
 
-        if progress_cb:
-            progress_cb('Loading Photos', 1.0)
-            progress_cb('Preparing Photo Versions/Tags', 0.0)
+        progress_cb('Loading Photos', 1.0)
+        progress_cb('Preparing Photo Versions/Tags', 0.0)
 
         for ct, photo in enumerate(self.photos.values()):
             cursor.execute('SELECT * FROM photo_versions WHERE photo_id = ?', (photo.id, ))
@@ -315,23 +311,32 @@ class FSpotDB(object):
             for pid, tid in cursor.fetchall():
                 photo.tags.append(self.tags[tid])
 
-            if ct % 10 == 0 and progress_cb:
+            if ct % 10 == 0:
                 progress_cb('Preparing Photo Versions/Tags', float(ct)/numrows)
 
         self.db.close()
 
-        if progress_cb:
-            progress_cb('Preparing Photo Versions/Tags', 1.0)
+        progress_cb('Preparing Photo Versions/Tags', 1.0)
 
 
-if __name__ == "__main__":
+class StatusReporter(object):
 
-    def cb(text, pcpt):
+    def __init__(self):
+        self.last_status = None
+
+    def cb(self, text, pcpt):
+        if text is not None and text != self.last_status:
+            sys.stdout.write('\n')
+        self.last_status = text
         sys.stdout.write('\r%s: % 5.1f%%' % (text, 100.0*pcpt))
         sys.stdout.flush()
 
-    db = FSpotDB('SUPPORT/f-spot.db', progress_cb=cb)
+if __name__ == "__main__":
+
+    sr = StatusReporter()
+
+    db = FSpotDB('SUPPORT/f-spot.db', progress_cb=sr.cb)
     sys.stdout.write('\n')
 
-    sc = SideCar(db.photos.values()[0])
+    sc = SideCar(db.photos[9380])
     sc.write()
