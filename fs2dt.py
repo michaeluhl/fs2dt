@@ -187,6 +187,14 @@ class SideCar(object):
             f_tags.update(f)
             h_tags.add(h)
 
+        f_tags.update(['f-roll', str(self.photo.get_roll().time)])
+        h_tags.add('f-roll|%s' % str(self.photo.get_roll().time))
+        versions = self.photo.versions.keys()
+        versions.sort()
+        k= versions[0]
+        f_tags.update(['f-group', str(self.photo.versions[k].import_md5)])
+        h_tags.add('f-group|%s' % str(self.photo.versions[k].import_md5))
+
         for version in self.photo.versions.values():
             root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
             self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
