@@ -1,15 +1,17 @@
 #!/usr/bin/env python2.7
 
-import collections
+import argparse
 from cStringIO import StringIO
 import datetime
+import os
 import os.path
 import sqlite3
 import sys
 from urlparse import urlparse, urljoin
 import xml.dom.minidom
-import xml.etree.cElementTree as ET
+import xml.etree.cElementTree as cET
 
+__version__ = "1.0-0"
 
 class Tag(object):
 
@@ -92,6 +94,8 @@ class Photo(object):
         self.id = photo_row[0]
         self.time = photo_row[1]
         self.base_uri = photo_row[2]
+        if not self.base_uri.endswith('/'):
+            self.base_uri = self.base_uri + '/'
         self.filename = photo_row[3]
         self.description = photo_row[4]
         self.roll_id = photo_row[5]
@@ -105,6 +109,29 @@ class Photo(object):
     def get_roll(self):
         return Roll.rolls[self.roll_id]
 
+    def write_sidecars(self, versions=None, test=False):
+        f_tags = set()
+        h_tags = set()
+        for tag in self.tags:
+            f, h = tag.to_xmp_tags()
+            f_tags.update(f)
+            h_tags.add(h)
+
+        f_tags.update(['f-roll', str(self.get_roll().time)])
+        h_tags.add('f-roll|%s' % str(self.get_roll().time))
+        versions = self.versions.keys()
+        versions.sort()
+        k = versions[0]
+        f_tags.update(['f-group', str(self.versions[k].import_md5)])
+        h_tags.add('f-group|%s' % str(self.versions[k].import_md5))
+
+        if not versions:
+            versions = self.versions.keys()
+        versions.sort()
+        for version in versions:
+            vsc = SideCar(self.versions[version], f_tags, h_tags)
+            vsc.write(test=test)
+
 
 class PhotoVersion(object):
 
@@ -113,6 +140,8 @@ class PhotoVersion(object):
         self.version_id = version_row[1]
         self.name = version_row[2]
         self.base_uri = version_row[3]
+        if not self.base_uri.endswith('/'):
+            self.base_uri = self.base_uri + '/'
         self.filename = version_row[4]
         self.import_md5 = version_row[5]
         self.file_path = urlparse(urljoin(self.base_uri, self.filename)).path
@@ -159,14 +188,17 @@ class SideCar(object):
         }
     }
 
-    def __init__(self, photo):
-        self.photo = photo
+    def __init__(self, photo_version, flat_tags, heir_tags):
+        self.version = photo_version
+        self.photo = self.version.parent
+        self.f_tags = flat_tags
+        self.h_tags = heir_tags
 
     @classmethod
     def _populate_tag(cls, element, element_dict):
         for key, value in element_dict.items():
             if type(value) == dict:
-                se = ET.SubElement(element, key)
+                se = cET.SubElement(element, key)
                 cls._populate_tag(se, value)
             else:
                 element.set(key, value)
@@ -178,86 +210,51 @@ class SideCar(object):
                 return e
         return None
 
-    def write(self):
-
-        f_tags = set()
-        h_tags = set()
-        for tag in self.photo.tags:
-            f, h = tag.to_xmp_tags()
-            f_tags.update(f)
-            h_tags.add(h)
-
-        f_tags.update(['f-roll', str(self.photo.get_roll().time)])
-        h_tags.add('f-roll|%s' % str(self.photo.get_roll().time))
-        versions = self.photo.versions.keys()
-        versions.sort()
-        k= versions[0]
-        f_tags.update(['f-group', str(self.photo.versions[k].import_md5)])
-        h_tags.add('f-group|%s' % str(self.photo.versions[k].import_md5))
-
-        for version in self.photo.versions.values():
-            root = ET.Element(SideCar.XMP_CONTENT.keys()[0])
-            self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
-            desc = self._find_tag(root, 'rdf:Description')
-            desc.set('xmp:rating', str(version.parent.rating))
-            if version.parent.description:
-                dcdesc = ET.SubElement(desc, 'dc:description')
-                rdfalt = ET.SubElement(dcdesc, 'rdf:Alt')
-                rdfli = ET.SubElement(rdfalt, 'rdf:li')
-                rdfli.set('xml:lang', "x-default")
-                rdfli.text = version.parent.description
-            if len(f_tags) > 0:
-                dcsub = ET.SubElement(desc, 'dc:subject')
-                rdfseq = ET.SubElement(dcsub, 'rdf:Seq')
-                for tag in f_tags:
-                    rdfli = ET.SubElement(rdfseq, 'rdf:li')
-                    rdfli.text = tag
-            if len(h_tags) > 0:
-                lrsub = ET.SubElement(desc, 'lr:hierarchicalSubject')
-                rdfseq = ET.SubElement(lrsub, 'rdf:Seq')
-                for tag in h_tags:
-                    rdfli = ET.SubElement(rdfseq, 'rdf:li')
-                    rdfli.text = tag
-            io = StringIO()
-            io.write("%s\n" % SideCar.XMP_DECL)
-            xml.dom.minidom.parseString(ET.tostring(root)).writexml(io,
-                                                                    addindent="  ",
-                                                                    newl="\n")
-            print io.getvalue()
-            io.close()
-
-
-COMMENT = """
-   xmp:Rating="4"
-   xmpMM:DerivedFrom="DSC_0139.jpg"
-   <dc:description>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default">this is the description</rdf:li>
-    </rdf:Alt>
-   </dc:description>
-   <dc:subject>
-    <rdf:Seq>
-     <rdf:li>DC-Washington: George's_teeth/dentures</rdf:li>
-     <rdf:li>My_Tag</rdf:li>
-     <rdf:li>TEST</rdf:li>
-    </rdf:Seq>
-   </dc:subject>
-   <lr:hierarchicalSubject>
-    <rdf:Seq>
-     <rdf:li>TEST|DC-Washington: George's_teeth/dentures</rdf:li>
-     <rdf:li>TEST|My_Tag</rdf:li>
-    </rdf:Seq>
-   </lr:hierarchicalSubject>
-"""
+    def write(self, test=False):
+        root = cET.Element(SideCar.XMP_CONTENT.keys()[0])
+        self._populate_tag(root, SideCar.XMP_CONTENT[root.tag])
+        desc = self._find_tag(root, 'rdf:Description')
+        desc.set('xmp:rating', str(self.photo.rating))
+        if self.photo.description:
+            dcdesc = cET.SubElement(desc, 'dc:description')
+            rdfalt = cET.SubElement(dcdesc, 'rdf:Alt')
+            rdfli = cET.SubElement(rdfalt, 'rdf:li')
+            rdfli.set('xml:lang', "x-default")
+            rdfli.text = self.photo.description
+        if len(self.f_tags) > 0:
+            dcsub = cET.SubElement(desc, 'dc:subject')
+            rdfseq = cET.SubElement(dcsub, 'rdf:Seq')
+            for tag in self.f_tags:
+                rdfli = cET.SubElement(rdfseq, 'rdf:li')
+                rdfli.text = tag
+        if len(self.h_tags) > 0:
+            lrsub = cET.SubElement(desc, 'lr:hierarchicalSubject')
+            rdfseq = cET.SubElement(lrsub, 'rdf:Seq')
+            for tag in self.h_tags:
+                rdfli = cET.SubElement(rdfseq, 'rdf:li')
+                rdfli.text = tag
+        scfn = '%s.xmp' % self.version.file_path
+        if test:
+            sys.stdout.write('SideCar(%s)\n' % scfn)
+            sys.stdout.write("%s\n" % SideCar.XMP_DECL)
+            xml.dom.minidom.parseString(cET.tostring(root)).writexml(sys.stdout,
+                                                                     addindent="  ",
+                                                                     newl="\n")
+        else:
+            with open(scfn, 'wb') as scf:
+                scf.write("%s\n" % SideCar.XMP_DECL)
+                xml.dom.minidom.parseString(cET.tostring(root)).writexml(scf,
+                                                                         addindent="  ",
+                                                                         newl="\n")
 
 
 class FSpotDB(object):
 
     def __init__(self, db_file, progress_cb=lambda a, b: None):
         self.filename = os.path.abspath(db_file)
-        self.db = sqlite3.connect(self.filename)
+        self._db = sqlite3.connect(self.filename)
 
-        cursor = self.db.cursor()
+        cursor = self._db.cursor()
 
         progress_cb('Loading Tags', 0.0)
 
@@ -322,9 +319,18 @@ class FSpotDB(object):
             if ct % 10 == 0:
                 progress_cb('Preparing Photo Versions/Tags', float(ct)/numrows)
 
-        self.db.close()
-
         progress_cb('Preparing Photo Versions/Tags', 1.0)
+        sys.stdout.write('\n')
+
+
+    def close(self):
+        self._db.close()
+
+    def get_photos_for_path(self, path):
+        abspath = 'file://%s' % os.path.abspath(path)
+        cursor = self._db.cursor()
+        cursor.execute("SELECT id FROM photos WHERE base_uri LIKE ? ORDER BY base_uri", ('%%%s%%' % abspath, ))
+        return [self.photos[row[0]] for row in cursor.fetchall()]
 
 
 class StatusReporter(object):
@@ -341,10 +347,32 @@ class StatusReporter(object):
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser(prog="fs2dt.py",
+                                     description="A program to prepare DarkTable .xmp files from an F-Spot database.",
+                                     version=__version__)
+    parser.add_argument('-f', '--fspotdb',
+                        action='store',
+                        default=os.path.join(os.getenv('HOME','./'),'photos.db'),
+                        type=str,
+                        help='Path to the f-spot database.',
+                        metavar='DB_PATH',
+                        dest='fspotdb')
+    parser.add_argument('-l', '--limit',
+                        action='store',
+                        default='/',
+                        type=str,
+                        help='Limit output to files contained within the identified path.',
+                        metavar='LIMIT_PATH',
+                        dest='limit')
+    parser.add_argument('--test',
+                        action='store_true',
+                        help='Write output to the standard output rather than to files.',
+                        dest='test')
+    args = parser.parse_args()
+
     sr = StatusReporter()
 
-    db = FSpotDB('SUPPORT/f-spot.db', progress_cb=sr.cb)
-    sys.stdout.write('\n')
-
-    sc = SideCar(db.photos[9380])
-    sc.write()
+    db = FSpotDB(args.fspotdb, progress_cb=sr.cb)
+    photos = db.get_photos_for_path(args.limit)
+    for photo in photos:
+        photo.write_sidecars(test=args.test)
